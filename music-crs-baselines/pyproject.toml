@@ -23,7 +23,7 @@ dependencies = [
     "torch>=2.5.1",
     "torchaudio>=2.5.1",
     "torchvision>=0.20.1",
-    "transformers>=4.46.3",
+    "transformers>=5.5.2",
 ]
 
 [tool.setuptools]
