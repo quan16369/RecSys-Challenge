@@ -39,6 +39,12 @@ class CRS_BASELINE:
         device="cuda",
         attn_implementation="eager",
         dtype=torch.bfloat16,
+        track_embedding_db_name: str = "talkpl-ai/TalkPlayData-Challenge-Track-Embeddings",
+        user_embedding_db_name: str = "talkpl-ai/TalkPlayData-Challenge-User-Embeddings",
+        user_embedding_split_types: list[str] | None = None,
+        rrf_k: int = 60,
+        bm25_candidate_k: int = 200,
+        cf_candidate_k: int = 200,
     ):
         """Initialize the CRS baseline components.
 
@@ -65,7 +71,20 @@ class CRS_BASELINE:
         self.dtype = dtype
         self.attn_implementation = attn_implementation
         self.lm = load_lm_module(self.lm_type, self.device, self.attn_implementation, self.dtype)
-        self.retrieval = load_retrieval_module(self.retrieval_type, self.item_db_name, self.track_split_types, self.corpus_types, self.cache_dir)
+        self.retrieval = load_retrieval_module(
+            self.retrieval_type,
+            self.item_db_name,
+            self.track_split_types,
+            self.corpus_types,
+            self.cache_dir,
+            device=self.device,
+            track_embedding_db_name=track_embedding_db_name,
+            user_embedding_db_name=user_embedding_db_name,
+            user_embedding_split_types=user_embedding_split_types,
+            rrf_k=rrf_k,
+            bm25_candidate_k=bm25_candidate_k,
+            cf_candidate_k=cf_candidate_k,
+        )
         self.item_db = MusicCatalogDB(self.item_db_name, self.track_split_types, self.corpus_types)
         self.user_db = UserProfileDB(self.user_db_name, self.user_split_types)
         self.prompts_dir = os.path.join(os.path.dirname(__file__), "system_prompts")
@@ -86,7 +105,42 @@ class CRS_BASELINE:
         """
         self.session_memory = chat_history
 
-    def _get_system_prompt(self, user_id: Optional[str] = None) -> str:
+    def _format_profile_str(self, user_profile: Optional[Dict[str, Any]]) -> str:
+        if not user_profile:
+            return ""
+        ordered_keys = [
+            "user_id",
+            "age",
+            "age_group",
+            "gender",
+            "country_name",
+            "preferred_language",
+            "preferred_musical_culture",
+        ]
+        lines = []
+        for key in ordered_keys:
+            value = user_profile.get(key)
+            if value not in (None, "", []):
+                lines.append(f"{key}: {value}")
+        return "\n".join(lines)
+
+    def _format_goal_str(self, conversation_goal: Optional[Dict[str, Any]]) -> str:
+        if not conversation_goal:
+            return ""
+        ordered_keys = ["listener_goal", "category", "specificity"]
+        lines = []
+        for key in ordered_keys:
+            value = conversation_goal.get(key)
+            if value not in (None, "", []):
+                lines.append(f"{key}: {value}")
+        return "\n".join(lines)
+
+    def _get_system_prompt(
+        self,
+        user_id: Optional[str] = None,
+        user_profile: Optional[Dict[str, Any]] = None,
+        conversation_goal: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Build the system prompt, optionally personalized with a user profile.
         Args:
             user_id: Optional user identifier. When provided, includes a personalization segment derived from the user's profile.
@@ -94,12 +148,22 @@ class CRS_BASELINE:
             The final system prompt string used for the LLM.
         """
         system_prompt = self.role_prompt["role_play"] + self.role_prompt["response_generation"]
-        if user_id:
+        user_profile_str = self._format_profile_str(user_profile)
+        if not user_profile_str and user_id:
             user_profile_str = self.user_db.id_to_profile_str(user_id)
+        if user_profile_str:
             system_prompt += self.role_prompt["personalization"] + '\n' + user_profile_str
+        goal_str = self._format_goal_str(conversation_goal)
+        if goal_str:
+            system_prompt += "\nConsider the user's session goal when explaining why the recommendations fit.\n" + goal_str
         return system_prompt
 
-    def chat(self, user_query: str, user_id: Optional[str] = None) -> dict[str, Any]:
+    def chat(
+        self,
+        user_query: str,
+        user_id: Optional[str] = None,
+        retrieval_context: Optional[Dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Run a single CRS turn: retrieve items and generate a response.
         Args:
             user_query: The user's latest message or request.
@@ -112,13 +176,31 @@ class CRS_BASELINE:
                 - recommend_item: Metadata for the top recommended item.
                 - response: The generated assistant response string.
         """
+        retrieval_context = retrieval_context.copy() if retrieval_context else {}
         self.session_memory.append({"role": "user", "content": user_query})
         # stage0. system prompt
-        system_prompt = self._get_system_prompt(user_id)
+        system_prompt = self._get_system_prompt(
+            user_id,
+            retrieval_context.get("user_profile"),
+            retrieval_context.get("conversation_goal"),
+        )
         # stage1. retrieval
         retrieval_input = "\n".join([f"{conversation['role']}: {conversation['content']}" for conversation in self.session_memory])
-        retrieval_items = self.retrieval.text_to_item_retrieval(retrieval_input, topk=20)
-        recommend_item = self.item_db.id_to_metadata(retrieval_items[0])
+        retrieval_context["user_id"] = user_id
+        retrieval_context["user_query"] = user_query
+        retrieval_context["session_memory"] = self.session_memory.copy()
+        if hasattr(self.retrieval, "batch_text_to_item_retrieval_with_context"):
+            retrieval_items = self.retrieval.batch_text_to_item_retrieval_with_context(
+                [retrieval_input],
+                [retrieval_context],
+                topk=20,
+            )[0]
+        else:
+            retrieval_items = self.retrieval.text_to_item_retrieval(retrieval_input, topk=20)
+        recommend_item = self.item_db.ids_to_metadata_block(
+            retrieval_items[:3],
+            extra_fields=["tag_list", "release_date", "popularity"],
+        )
         # stage2. response generation
         response = self.lm.response_generation(system_prompt, self.session_memory, recommend_item)
         return {
@@ -148,26 +230,50 @@ class CRS_BASELINE:
         sys_prompts = []
         retrieval_inputs = []
         session_memories = []
+        retrieval_contexts = []
 
         for data in batch_data:
             user_query = data['user_query']
             user_id = data.get('user_id')
             session_memory = data['session_memory'].copy()
             session_memory.append({"role": "user", "content": user_query})
+            retrieval_context = data.get("retrieval_context", {}).copy()
+            retrieval_context["user_id"] = user_id
+            retrieval_context["user_query"] = user_query
+            retrieval_context["session_memory"] = session_memory
 
-            sys_prompts.append(self._get_system_prompt(user_id))
+            sys_prompts.append(
+                self._get_system_prompt(
+                    user_id,
+                    retrieval_context.get("user_profile"),
+                    retrieval_context.get("conversation_goal"),
+                )
+            )
             retrieval_input = "\n".join([f"{conversation['role']}: {conversation['content']}" for conversation in session_memory])
             retrieval_inputs.append(retrieval_input)
             session_memories.append(session_memory)
+            retrieval_contexts.append(retrieval_context)
 
         # Stage 1: Batch retrieval
-        if hasattr(self.retrieval, 'batch_text_to_item_retrieval'):
+        if hasattr(self.retrieval, 'batch_text_to_item_retrieval_with_context'):
+            batch_retrieval_items = self.retrieval.batch_text_to_item_retrieval_with_context(
+                retrieval_inputs,
+                retrieval_contexts,
+                topk=20,
+            )
+        elif hasattr(self.retrieval, 'batch_text_to_item_retrieval'):
             batch_retrieval_items = self.retrieval.batch_text_to_item_retrieval(retrieval_inputs, topk=20)
         else:
             # Fallback to sequential retrieval if batch method not available
             batch_retrieval_items = [self.retrieval.text_to_item_retrieval(inp, topk=20) for inp in retrieval_inputs]
 
-        recommend_items = [self.item_db.id_to_metadata(items[0]) for items in batch_retrieval_items]
+        recommend_items = [
+            self.item_db.ids_to_metadata_block(
+                items[:3],
+                extra_fields=["tag_list", "release_date", "popularity"],
+            )
+            for items in batch_retrieval_items
+        ]
 
         # Stage 2: Batch response generation
         if hasattr(self.lm, 'batch_response_generation'):

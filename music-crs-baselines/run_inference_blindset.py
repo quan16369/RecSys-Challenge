@@ -7,46 +7,10 @@ import json
 import torch
 import argparse
 from mcrs import load_crs_baseline
+from mcrs.inference_context import build_blind_context
 from datasets import load_dataset
 from tqdm import tqdm
-from typing import List, Dict, Any, Tuple
-import pandas as pd
 from omegaconf import OmegaConf
-
-def chat_history_parser(conversations, music_crs, target_turn_number):
-    """
-    Parse conversation history up to a target turn.
-
-    Args:
-        conversations (List[Dict]): List of conversation turn dictionaries containing:
-            - turn_number: Turn index (1-8)
-            - role: Speaker role ('user', 'assistant', 'music')
-            - content: Message content or track ID
-        music_crs: CRS baseline instance (used to convert track IDs to metadata)
-        target_turn_number (int): The turn to predict (history excludes this turn)
-
-    Returns:
-        Tuple[List[Dict], str]:
-            - chat_history: List of previous messages formatted as [{"role": ..., "content": ...}]
-            - user_query: The user query at the target turn
-    """
-    df_conversation = pd.DataFrame(conversations)
-    df_history = df_conversation[df_conversation['turn_number'] < target_turn_number]
-    chat_history = []
-    for turn_data in df_history.to_dict(orient="records"):
-        turn_number = turn_data['turn_number']
-        current_role = turn_data['role']
-        current_content = turn_data['content']
-        if turn_data['role'] == "music":
-            current_role = "assistant"
-            current_content = music_crs.item_db.id_to_metadata(turn_data['content'])
-        chat_history.append({
-            "role": current_role,
-            "content": current_content
-        })
-    df_current_turn = df_conversation[df_conversation['turn_number'] == target_turn_number]
-    user_query = df_current_turn.iloc[0]['content']
-    return chat_history, user_query
 
 def main(args):
     """
@@ -67,8 +31,9 @@ def main(args):
         - Tracks progress with tqdm progress bar
         - Saves comprehensive results for evaluation
     """
-    print("Removing cache directory for preventing memory issues...")
-    os.system("rm -rf cache")
+    if args.refresh_cache:
+        print("Refreshing cache directory...")
+        os.system("rm -rf cache")
     config = OmegaConf.load(f"config/{args.tid}.yaml")
     music_crs = load_crs_baseline(
         lm_type=config.lm_type,
@@ -81,7 +46,13 @@ def main(args):
         cache_dir=config.cache_dir,
         device=config.device,
         attn_implementation=config.attn_implementation,
-        dtype=torch.bfloat16
+        dtype=torch.bfloat16,
+        track_embedding_db_name=getattr(config, "track_embedding_db_name", "talkpl-ai/TalkPlayData-Challenge-Track-Embeddings"),
+        user_embedding_db_name=getattr(config, "user_embedding_db_name", "talkpl-ai/TalkPlayData-Challenge-User-Embeddings"),
+        user_embedding_split_types=getattr(config, "user_embedding_split_types", ["train", "test_warm", "test_cold"]),
+        rrf_k=getattr(config, "rrf_k", 60),
+        bm25_candidate_k=getattr(config, "bm25_candidate_k", 200),
+        cf_candidate_k=getattr(config, "cf_candidate_k", 200),
     )
     db = load_dataset(config.test_dataset_name, split="test")
     # Prepare all batch data at once
@@ -89,13 +60,12 @@ def main(args):
     for item in db:
         user_id = item['user_id']
         session_id = item['session_id']
-        chat_history = item['conversations'][:-1]
-        user_query = item['conversations'][-1]['content']
-        turn_number = item['conversations'][-1]['turn_number']
+        chat_history, user_query, retrieval_context, turn_number = build_blind_context(item, music_crs)
         batch_data.append({
             'user_query': user_query,
             'user_id': user_id,
-            'session_memory': chat_history
+            'session_memory': chat_history,
+            'retrieval_context': retrieval_context,
         })
         metadata.append({
             'session_id': session_id,
@@ -140,6 +110,11 @@ if __name__ == "__main__":
         type=int,
         default=16,
         help="Number of queries to process in parallel. Reduce if encountering GPU memory issues."
+    )
+    parser.add_argument(
+        "--refresh_cache",
+        action="store_true",
+        help="Rebuild retrieval caches instead of reusing the existing cache directory."
     )
     parser.add_argument(
         "--save_path",

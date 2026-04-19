@@ -1,0 +1,27 @@
+lm_type: "meta-llama/Llama-3.2-1B-Instruct"
+retrieval_type: "hybrid_rrf"
+test_dataset_name: "talkpl-ai/TalkPlayData-Challenge-Blind-A"
+item_db_name: "talkpl-ai/TalkPlayData-Challenge-Track-Metadata"
+user_db_name: "talkpl-ai/TalkPlayData-Challenge-User-Metadata"
+track_embedding_db_name: "talkpl-ai/TalkPlayData-Challenge-Track-Embeddings"
+user_embedding_db_name: "talkpl-ai/TalkPlayData-Challenge-User-Embeddings"
+track_split_types:
+  - "all_tracks"
+user_split_types:
+  - "all_users"
+user_embedding_split_types:
+  - "train"
+  - "test_warm"
+  - "test_cold"
+corpus_types:
+  - "track_name"
+  - "artist_name"
+  - "album_name"
+  - "tag_list"
+  - "release_date"
+cache_dir: "./cache"
+device: "cuda"
+attn_implementation: "eager"
+rrf_k: 60
+bm25_candidate_k: 200
+cf_candidate_k: 200

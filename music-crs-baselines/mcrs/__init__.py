@@ -12,6 +12,30 @@ def load_crs_baseline(
     cache_dir="./cache",
     device="cuda",
     attn_implementation="eager",
-    dtype=torch.bfloat16
+    dtype=torch.bfloat16,
+    track_embedding_db_name: str = "talkpl-ai/TalkPlayData-Challenge-Track-Embeddings",
+    user_embedding_db_name: str = "talkpl-ai/TalkPlayData-Challenge-User-Embeddings",
+    user_embedding_split_types: list[str] | None = None,
+    rrf_k: int = 60,
+    bm25_candidate_k: int = 200,
+    cf_candidate_k: int = 200,
 ):
-    return CRS_BASELINE(lm_type, retrieval_type, item_db_name, user_db_name, track_split_types, user_split_types, corpus_types, cache_dir, device, attn_implementation, dtype)
+    return CRS_BASELINE(
+        lm_type,
+        retrieval_type,
+        item_db_name,
+        user_db_name,
+        track_split_types,
+        user_split_types,
+        corpus_types,
+        cache_dir,
+        device,
+        attn_implementation,
+        dtype,
+        track_embedding_db_name,
+        user_embedding_db_name,
+        user_embedding_split_types,
+        rrf_k,
+        bm25_candidate_k,
+        cf_candidate_k,
+    )
