@@ -61,6 +61,8 @@ def main(args):
         rrf_k=getattr(config, "rrf_k", 60),
         bm25_candidate_k=getattr(config, "bm25_candidate_k", 200),
         cf_candidate_k=getattr(config, "cf_candidate_k", 200),
+        max_input_tokens=getattr(config, "max_input_tokens", 1536),
+        max_new_tokens=getattr(config, "max_new_tokens", 48),
     )
     db = load_dataset(config.test_dataset_name, split="test")
     # Prepare all batch data at once

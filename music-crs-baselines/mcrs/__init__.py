@@ -19,6 +19,8 @@ def load_crs_baseline(
     rrf_k: int = 60,
     bm25_candidate_k: int = 200,
     cf_candidate_k: int = 200,
+    max_input_tokens: int = 1536,
+    max_new_tokens: int = 48,
 ):
     return CRS_BASELINE(
         lm_type,
@@ -38,4 +40,6 @@ def load_crs_baseline(
         rrf_k,
         bm25_candidate_k,
         cf_candidate_k,
+        max_input_tokens,
+        max_new_tokens,
     )

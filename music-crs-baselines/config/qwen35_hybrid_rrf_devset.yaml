@@ -23,6 +23,8 @@ cache_dir: "./cache"
 device: "cuda"
 dtype: "float16"
 attn_implementation: "eager"
+max_input_tokens: 1024
+max_new_tokens: 32
 rrf_k: 60
 bm25_candidate_k: 200
 cf_candidate_k: 200

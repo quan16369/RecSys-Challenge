@@ -45,6 +45,8 @@ class CRS_BASELINE:
         rrf_k: int = 60,
         bm25_candidate_k: int = 200,
         cf_candidate_k: int = 200,
+        max_input_tokens: int = 1536,
+        max_new_tokens: int = 48,
     ):
         """Initialize the CRS baseline components.
 
@@ -70,7 +72,14 @@ class CRS_BASELINE:
         self.device = device
         self.dtype = dtype
         self.attn_implementation = attn_implementation
-        self.lm = load_lm_module(self.lm_type, self.device, self.attn_implementation, self.dtype)
+        self.lm = load_lm_module(
+            self.lm_type,
+            self.device,
+            self.attn_implementation,
+            self.dtype,
+            max_input_tokens=max_input_tokens,
+            max_new_tokens=max_new_tokens,
+        )
         self.retrieval = load_retrieval_module(
             self.retrieval_type,
             self.item_db_name,
