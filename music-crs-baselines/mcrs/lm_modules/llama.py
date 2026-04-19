@@ -10,7 +10,8 @@ class LLAMA_MODEL:
         self.attn_implementation = attn_implementation
         self.lm, self.tokenizer = self._load_model()
         self.lm.eval()
-        self.lm.to(device=self.device, dtype=self.dtype)
+        if getattr(self.lm, "hf_device_map", None) is None:
+            self.lm.to(device=self.device, dtype=self.dtype)
 
     def _load_model(self):
         tokenizer = AutoTokenizer.from_pretrained(
@@ -20,11 +21,17 @@ class LLAMA_MODEL:
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        model_kwargs = {
+            "attn_implementation": self.attn_implementation,
+            "torch_dtype": self.dtype,
+            "trust_remote_code": True,
+            "low_cpu_mem_usage": True,
+        }
+        if self.device == "cuda":
+            model_kwargs["device_map"] = "auto"
         lm = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            attn_implementation=self.attn_implementation,
-            torch_dtype=self.dtype,
-            trust_remote_code=True,
+            **model_kwargs,
         )
         return lm, tokenizer
 
@@ -33,7 +40,10 @@ class LLAMA_MODEL:
         chat_data += chat_history
         chat_data += [{"role": "assistant", "content": recommend_item}]
         if hasattr(self.tokenizer, "apply_chat_template"):
-            return self.tokenizer.apply_chat_template(chat_data, tokenize=False, add_generation_prompt=True)
+            kwargs = {"tokenize": False, "add_generation_prompt": True}
+            if "qwen3" in self.model_name.lower():
+                kwargs["enable_thinking"] = False
+            return self.tokenizer.apply_chat_template(chat_data, **kwargs)
 
         lines = []
         for message in chat_data:
@@ -48,8 +58,9 @@ class LLAMA_MODEL:
     def response_generation(self, sys_prompt: str, chat_history: list, recommend_item: str,max_new_tokens=512, response_format=None):
         chat_history = self._format_chat_history(sys_prompt, chat_history, recommend_item)
         token_inputs = self.tokenizer(chat_history, return_tensors="pt")
-        input_ids = token_inputs.input_ids.to(self.device)
-        attention_mask = token_inputs.attention_mask.to(self.device)
+        target_device = self.lm.device
+        input_ids = token_inputs.input_ids.to(target_device)
+        attention_mask = token_inputs.attention_mask.to(target_device)
         with torch.no_grad():
             outputs = self.lm.generate(
                 input_ids,
@@ -85,8 +96,9 @@ class LLAMA_MODEL:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         token_inputs = self.tokenizer(formatted_chats, return_tensors="pt", padding=True, truncation=True)
-        input_ids = token_inputs.input_ids.to(self.device)
-        attention_mask = token_inputs.attention_mask.to(self.device)
+        target_device = self.lm.device
+        input_ids = token_inputs.input_ids.to(target_device)
+        attention_mask = token_inputs.attention_mask.to(target_device)
 
         with torch.no_grad():
             outputs = self.lm.generate(
