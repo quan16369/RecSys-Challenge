@@ -12,6 +12,14 @@ from datasets import load_dataset
 from tqdm import tqdm
 from omegaconf import OmegaConf
 
+def resolve_torch_dtype(config):
+    dtype_name = getattr(config, "dtype", "bfloat16")
+    if isinstance(dtype_name, torch.dtype):
+        return dtype_name
+    if not hasattr(torch, dtype_name):
+        raise ValueError(f"Unsupported torch dtype in config: {dtype_name}")
+    return getattr(torch, dtype_name)
+
 def main(args):
     """
     Run batch inference on TalkPlayData-2 test dataset.
@@ -46,7 +54,7 @@ def main(args):
         cache_dir=config.cache_dir,
         device=config.device,
         attn_implementation=config.attn_implementation,
-        dtype=torch.bfloat16,
+        dtype=resolve_torch_dtype(config),
         track_embedding_db_name=getattr(config, "track_embedding_db_name", "talkpl-ai/TalkPlayData-Challenge-Track-Embeddings"),
         user_embedding_db_name=getattr(config, "user_embedding_db_name", "talkpl-ai/TalkPlayData-Challenge-User-Embeddings"),
         user_embedding_split_types=getattr(config, "user_embedding_split_types", ["train", "test_warm", "test_cold"]),
